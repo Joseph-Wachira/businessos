@@ -36,6 +36,30 @@ function publicUser(user) {
   };
 }
 
+// A brand-new user can have pending invitations from several different
+// businesses at once, so this is inherently cross-tenant and can't go
+// through a single forTenant()-scoped client — raw prisma is the correct
+// tool here, same as membershipsFor()/listMyBusinesses() below.
+async function acceptPendingInvitations(user) {
+  const pending = await prisma.invitation.findMany({ where: { email: user.email, status: 'PENDING' } });
+  if (pending.length === 0) return [];
+
+  await prisma.$transaction([
+    ...pending.map((invitation) =>
+      prisma.membership.create({ data: { userId: user.id, businessId: invitation.businessId, role: invitation.role } }),
+    ),
+    ...pending.map((invitation) =>
+      prisma.invitation.update({ where: { id: invitation.id }, data: { status: 'ACCEPTED', resolvedAt: new Date() } }),
+    ),
+  ]);
+
+  auditLog('invitations_accepted_on_register', {
+    actorUserId: user.id,
+    metadata: { count: pending.length, businessIds: pending.map((i) => i.businessId) },
+  });
+  return membershipsFor(user.id);
+}
+
 async function membershipsFor(userId) {
   const memberships = await prisma.membership.findMany({
     where: { userId },
@@ -52,7 +76,11 @@ async function membershipsFor(userId) {
 export async function register({ email, password, firstName, lastName }, { ip, userAgent }) {
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
-    // Generic response: doesn't confirm the email is taken to the caller.
+    // Pay the same bcrypt cost as the new-user path below so response
+    // timing doesn't also reveal which branch ran — the response body is
+    // already identical (see auth.controller.js); latency was the one
+    // remaining side-channel.
+    await comparePassword(password, await getDummyHash());
     auditLog('register_attempted_existing_email', { metadata: { email } });
     return { alreadyRegistered: true };
   }
@@ -62,7 +90,8 @@ export async function register({ email, password, firstName, lastName }, { ip, u
     data: { email, passwordHash, firstName, lastName },
   });
 
-  await issueEmailVerificationToken(user);
+  const { rawToken: emailVerificationRawToken } = await issueEmailVerificationToken(user);
+  const memberships = await acceptPendingInvitations(user);
 
   const accessToken = signAccessToken(user);
   const refreshRawToken = await issueRefreshToken({ userId: user.id, createdByIp: ip, userAgent });
@@ -72,9 +101,10 @@ export async function register({ email, password, firstName, lastName }, { ip, u
   return {
     alreadyRegistered: false,
     user: publicUser(user),
-    memberships: [],
+    memberships,
     accessToken,
     refreshRawToken,
+    emailVerificationRawToken,
   };
 }
 
@@ -105,10 +135,14 @@ export async function login({ email, password }, { ip, userAgent }) {
       where: { id: user.id },
       data: {
         failedLoginCount: shouldLock ? 0 : failedLoginCount,
-        // Exponential backoff by lockout cycle count, capped implicitly by
-        // the reset-on-success below; simple and DoS-resistant (no
-        // permanent lockout an attacker could trigger against the real owner).
-        lockedUntil: shouldLock ? new Date(Date.now() + 2 ** 1 * 60 * 1000) : null,
+        // Flat 2-minute lockout once failed attempts reach the threshold;
+        // the counter then resets to 0, so a later run of failures starts
+        // the same 2-minute clock again rather than escalating. DoS-
+        // resistant (no permanent lockout against the real owner) at the
+        // cost of a weaker deterrent — an attacker can wait out any single
+        // lockout at a constant rate. Real escalation would need a
+        // persisted lockout-cycle counter, which doesn't exist yet.
+        lockedUntil: shouldLock ? new Date(Date.now() + 2 * 60 * 1000) : null,
       },
     });
     auditLog('login_failed', { actorUserId: user.id, metadata: { reason: 'bad_password' } });
@@ -134,6 +168,14 @@ export async function logout(userId) {
 }
 
 async function issueEmailVerificationToken(user) {
+  // Invalidate any outstanding unused tokens first so a stale link (leaked
+  // via a shared inbox, browser history, or a forwarded email) stops
+  // working the moment a newer one is requested, not just once it's used.
+  await prisma.emailVerificationToken.updateMany({
+    where: { userId: user.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+
   const rawToken = generateRawToken();
   await prisma.emailVerificationToken.create({
     data: {
@@ -148,12 +190,13 @@ async function issueEmailVerificationToken(user) {
     subject: 'Verify your BusinessOS email',
     html: `<p>Confirm your email address:</p><p><a href="${link}">${link}</a></p>`,
   });
+  return { rawToken };
 }
 
 export async function resendVerificationEmail(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user || user.isEmailVerified) return;
-  await issueEmailVerificationToken(user);
+  if (!user || user.isEmailVerified) return null;
+  return issueEmailVerificationToken(user);
 }
 
 export async function verifyEmail(rawToken) {
@@ -178,7 +221,14 @@ export async function verifyEmail(rawToken) {
 
 export async function requestPasswordReset(email) {
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return; // generic response regardless, no enumeration
+  if (!user) return null; // generic response regardless, no enumeration
+
+  // Same reasoning as issueEmailVerificationToken: a newer reset link
+  // should retire any older ones, not just race ahead of them.
+  await prisma.passwordResetToken.updateMany({
+    where: { userId: user.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
 
   const rawToken = generateRawToken();
   await prisma.passwordResetToken.create({
@@ -196,6 +246,7 @@ export async function requestPasswordReset(email) {
     html: `<p>Reset your password:</p><p><a href="${link}">${link}</a></p>`,
   });
   auditLog('password_reset_requested', { actorUserId: user.id });
+  return { rawToken };
 }
 
 export async function resetPassword(rawToken, newPassword) {

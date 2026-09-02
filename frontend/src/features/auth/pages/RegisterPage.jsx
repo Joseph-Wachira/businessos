@@ -8,11 +8,13 @@ export default function RegisterPage() {
   const setSession = useAuthStore((s) => s.setSession);
   const [form, setForm] = useState({ email: '', password: '', firstName: '' });
   const [error, setError] = useState(null);
+  const [info, setInfo] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setSubmitting(true);
     try {
       const data = await register(form);
@@ -20,7 +22,10 @@ export default function RegisterPage() {
         setSession({ user: data.user, memberships: data.memberships, accessToken: data.accessToken });
         navigate('/');
       } else {
-        setError(data.message);
+        // Same generic response for a new vs. already-registered email
+        // (see auth.controller.js) — it's informational, not a failure, so
+        // it shouldn't read as one.
+        setInfo(data.message);
       }
     } catch (err) {
       setError(err.response?.data?.error?.message ?? 'Registration failed');
@@ -63,6 +68,7 @@ export default function RegisterPage() {
           />
         </div>
         {error && <p className="error-text">{error}</p>}
+        {info && <p>{info}</p>}
         <button type="submit" disabled={submitting}>
           {submitting ? 'Creating account...' : 'Register'}
         </button>

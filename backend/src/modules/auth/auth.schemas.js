@@ -6,9 +6,18 @@ const password = z
   .regex(/[a-zA-Z]/, 'Password must contain at least one letter')
   .regex(/[0-9]/, 'Password must contain at least one digit');
 
+// Postgres's unique constraint on User.email is case-sensitive, and nothing
+// downstream re-checks case — normalizing at this one boundary is what makes
+// "Jane@x.com" and "jane@x.com" the same account everywhere (register,
+// login, password reset all validate through one of the schemas below).
+const email = z
+  .string()
+  .email()
+  .transform((value) => value.trim().toLowerCase());
+
 export const registerSchema = z.object({
   body: z.object({
-    email: z.string().email(),
+    email,
     password,
     firstName: z.string().min(1).optional(),
     lastName: z.string().min(1).optional(),
@@ -19,7 +28,7 @@ export const registerSchema = z.object({
 
 export const loginSchema = z.object({
   body: z.object({
-    email: z.string().email(),
+    email,
     password: z.string().min(1),
   }),
   params: z.object({}),
@@ -27,7 +36,7 @@ export const loginSchema = z.object({
 });
 
 export const forgotPasswordSchema = z.object({
-  body: z.object({ email: z.string().email() }),
+  body: z.object({ email }),
   params: z.object({}),
   query: z.object({}),
 });

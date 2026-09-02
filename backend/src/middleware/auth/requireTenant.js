@@ -13,10 +13,23 @@ import { ApiError } from '../../utils/ApiError.js';
  * re-authenticating.
  */
 export async function requireTenant(req, res, next) {
-  const businessId = req.header('X-Business-Id') || req.params.businessId;
+  const businessId = req.header('X-Business-Id');
   if (!businessId) {
     return next(
       ApiError.badRequest('BUSINESS_CONTEXT_REQUIRED', 'X-Business-Id header is required'),
+    );
+  }
+
+  // A route that also carries a :businessId URL segment (e.g. GET
+  // /businesses/:businessId) must agree with the header rather than let
+  // either one silently win — two different tenant IDs on one request is
+  // a client bug worth rejecting, not resolving by picking a favorite.
+  if (req.params.businessId && req.params.businessId !== businessId) {
+    return next(
+      ApiError.badRequest(
+        'BUSINESS_CONTEXT_MISMATCH',
+        'X-Business-Id header does not match the business in the URL',
+      ),
     );
   }
 

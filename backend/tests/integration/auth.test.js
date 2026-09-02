@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
 import { prisma } from '../../src/db/prisma.js';
+import * as passwordUtils from '../../src/utils/password.js';
 
 const app = createApp();
 
@@ -110,29 +111,75 @@ describe('auth flow', () => {
     expect(refreshRes.status).toBe(401);
   });
 
-  it('completes the password reset flow and revokes existing sessions', async () => {
+  it('completes the password reset flow, rejects reusing the token, and revokes existing sessions', async () => {
     const registerRes = await request(app)
       .post('/api/auth/register')
       .send({ email: 'frank@example.com', password: 'Password123' });
     const refreshCookie = extractCookie(registerRes, 'refreshToken');
 
-    await request(app).post('/api/auth/forgot-password').send({ email: 'frank@example.com' });
-
-    const user = await prisma.user.findUnique({ where: { email: 'frank@example.com' } });
-    const resetToken = await prisma.passwordResetToken.findFirst({ where: { userId: user.id } });
-    // Test-only access to the raw token isn't possible (only the hash is stored) —
-    // exercise the invalid-token path instead of a real reset here; the atomic
-    // single-use update itself is covered by rejecting an already-used/invalid token twice.
+    const forgotRes = await request(app).post('/api/auth/forgot-password').send({ email: 'frank@example.com' });
+    const { resetToken } = forgotRes.body;
     expect(resetToken).toBeTruthy();
 
-    const badReset = await request(app)
+    const resetRes = await request(app)
       .post('/api/auth/reset-password')
-      .send({ token: 'not-a-real-token', newPassword: 'NewPassword123' });
-    expect(badReset.status).toBe(400);
+      .send({ token: resetToken, newPassword: 'NewPassword123' });
+    expect(resetRes.status).toBe(200);
 
-    // Original session must still be usable since the reset above never succeeded.
+    const loginOld = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'frank@example.com', password: 'Password123' });
+    expect(loginOld.status).toBe(401);
+
+    const loginNew = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'frank@example.com', password: 'NewPassword123' });
+    expect(loginNew.status).toBe(200);
+
+    // Single-use: replaying the same token must fail even though it hasn't expired.
+    const replay = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: resetToken, newPassword: 'AnotherPassword123' });
+    expect(replay.status).toBe(400);
+
+    // A reset is treated as a compromise response: it revokes every existing
+    // session, including the one from registration.
     const refreshRes = await request(app).post('/api/auth/refresh').set('Cookie', refreshCookie);
-    expect(refreshRes.status).toBe(200);
+    expect(refreshRes.status).toBe(401);
+  });
+
+  it('rejects an expired password reset token', async () => {
+    await request(app).post('/api/auth/register').send({ email: 'grant@example.com', password: 'Password123' });
+    const forgotRes = await request(app).post('/api/auth/forgot-password').send({ email: 'grant@example.com' });
+
+    const user = await prisma.user.findUnique({ where: { email: 'grant@example.com' } });
+    await prisma.passwordResetToken.updateMany({
+      where: { userId: user.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: forgotRes.body.resetToken, newPassword: 'NewPassword123' });
+    expect(res.status).toBe(400);
+  });
+
+  it('invalidates an earlier password reset token once a new one is requested', async () => {
+    await request(app).post('/api/auth/register').send({ email: 'heidi@example.com', password: 'Password123' });
+
+    const firstForgot = await request(app).post('/api/auth/forgot-password').send({ email: 'heidi@example.com' });
+    const secondForgot = await request(app).post('/api/auth/forgot-password').send({ email: 'heidi@example.com' });
+    expect(firstForgot.body.resetToken).not.toBe(secondForgot.body.resetToken);
+
+    const resetWithOldToken = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: firstForgot.body.resetToken, newPassword: 'NewPassword123' });
+    expect(resetWithOldToken.status).toBe(400);
+
+    const resetWithNewToken = await request(app)
+      .post('/api/auth/reset-password')
+      .send({ token: secondForgot.body.resetToken, newPassword: 'NewPassword123' });
+    expect(resetWithNewToken.status).toBe(200);
   });
 
   it('rejects an unauthenticated request to /api/auth/me', async () => {
@@ -151,5 +198,106 @@ describe('auth flow', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.user.email).toBe('grace@example.com');
+  });
+
+  it('completes the email verification flow and rejects reusing the token', async () => {
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'ivan@example.com', password: 'Password123' });
+    const { emailVerificationToken } = registerRes.body;
+    expect(emailVerificationToken).toBeTruthy();
+
+    const verifyRes = await request(app).post('/api/auth/verify-email').send({ token: emailVerificationToken });
+    expect(verifyRes.status).toBe(200);
+
+    const user = await prisma.user.findUnique({ where: { email: 'ivan@example.com' } });
+    expect(user.isEmailVerified).toBe(true);
+
+    const replay = await request(app).post('/api/auth/verify-email').send({ token: emailVerificationToken });
+    expect(replay.status).toBe(400);
+  });
+
+  it('resend-verification issues a fresh token and invalidates the previous one', async () => {
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'judy@example.com', password: 'Password123' });
+    const firstToken = registerRes.body.emailVerificationToken;
+
+    const resendRes = await request(app)
+      .post('/api/auth/resend-verification')
+      .set('Authorization', `Bearer ${registerRes.body.accessToken}`);
+    expect(resendRes.status).toBe(200);
+    expect(resendRes.body.verificationToken).toBeTruthy();
+    expect(resendRes.body.verificationToken).not.toBe(firstToken);
+
+    const verifyWithOldToken = await request(app).post('/api/auth/verify-email').send({ token: firstToken });
+    expect(verifyWithOldToken.status).toBe(400);
+
+    const verifyWithNewToken = await request(app)
+      .post('/api/auth/verify-email')
+      .send({ token: resendRes.body.verificationToken });
+    expect(verifyWithNewToken.status).toBe(200);
+  });
+
+  it('locks the account after repeated failed logins, then unlocks once the lockout window passes', async () => {
+    await request(app).post('/api/auth/register').send({ email: 'kevin@example.com', password: 'Password123' });
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'kevin@example.com', password: 'WrongPassword1' });
+      expect(res.status).toBe(401);
+    }
+
+    const lockedRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'kevin@example.com', password: 'Password123' });
+    expect(lockedRes.status).toBe(401);
+    expect(lockedRes.body.error.code).toBe('ACCOUNT_LOCKED');
+
+    const user = await prisma.user.findUnique({ where: { email: 'kevin@example.com' } });
+    await prisma.user.update({ where: { id: user.id }, data: { lockedUntil: new Date(Date.now() - 1000) } });
+
+    const unlockedRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'kevin@example.com', password: 'Password123' });
+    expect(unlockedRes.status).toBe(200);
+  });
+
+  it('treats email as case-insensitive for both duplicate detection and login', async () => {
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'Mallory@Example.com', password: 'Password123' });
+    expect(registerRes.status).toBe(201);
+    expect(registerRes.body.accessToken).toBeTruthy();
+
+    const dupRes = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'mallory@example.com', password: 'Password123' });
+    expect(dupRes.status).toBe(201);
+    expect(dupRes.body.accessToken).toBeUndefined(); // generic "already registered" response
+
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'MALLORY@EXAMPLE.COM', password: 'Password123' });
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.user.email).toBe('mallory@example.com');
+  });
+
+  it('pays the same bcrypt cost for a duplicate-email registration as a fresh one (closes the timing side-channel)', async () => {
+    await request(app).post('/api/auth/register').send({ email: 'laura@example.com', password: 'Password123' });
+
+    const compareSpy = vi.spyOn(passwordUtils, 'comparePassword');
+    try {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'laura@example.com', password: 'Password123' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.accessToken).toBeUndefined();
+      expect(compareSpy).toHaveBeenCalled();
+    } finally {
+      compareSpy.mockRestore();
+    }
   });
 });

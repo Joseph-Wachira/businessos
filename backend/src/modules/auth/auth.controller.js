@@ -1,4 +1,5 @@
 import { ApiError } from '../../utils/ApiError.js';
+import { config } from '../../config/env.js';
 import * as authService from './auth.service.js';
 import {
   setRefreshCookie,
@@ -13,6 +14,14 @@ import { prisma } from '../../db/prisma.js';
 
 function requestMeta(req) {
   return { ip: req.ip, userAgent: req.headers['user-agent'] };
+}
+
+// Raw single-use tokens are never recoverable from the database (only their
+// hash is stored), so integration tests have no way to drive a real
+// verify/reset/reuse flow without this seam. Only ever populated in the test
+// environment; never reachable when NODE_ENV is production or development.
+function testOnlyFields(fields) {
+  return config.NODE_ENV === 'test' ? fields : {};
 }
 
 export async function register(req, res, next) {
@@ -33,6 +42,7 @@ export async function register(req, res, next) {
       memberships: result.memberships,
       accessToken: result.accessToken,
       message: 'If that email is new, check your inbox to verify your account.',
+      ...testOnlyFields({ emailVerificationToken: result.emailVerificationRawToken }),
     });
   } catch (err) {
     next(err);
@@ -99,8 +109,11 @@ export async function me(req, res, next) {
 
 export async function forgotPassword(req, res, next) {
   try {
-    await authService.requestPasswordReset(req.validated.body.email);
-    res.json({ message: 'If that email exists, a password reset link has been sent.' });
+    const result = await authService.requestPasswordReset(req.validated.body.email);
+    res.json({
+      message: 'If that email exists, a password reset link has been sent.',
+      ...testOnlyFields({ resetToken: result?.rawToken }),
+    });
   } catch (err) {
     next(err);
   }
@@ -126,8 +139,11 @@ export async function verifyEmail(req, res, next) {
 
 export async function resendVerification(req, res, next) {
   try {
-    await authService.resendVerificationEmail(req.user.id);
-    res.json({ message: 'If your email is unverified, a new link has been sent.' });
+    const result = await authService.resendVerificationEmail(req.user.id);
+    res.json({
+      message: 'If your email is unverified, a new link has been sent.',
+      ...testOnlyFields({ verificationToken: result?.rawToken }),
+    });
   } catch (err) {
     next(err);
   }
