@@ -3,8 +3,6 @@ dist/
 build/
 coverage/
 *.log
-.env
-.env.local
 .env.*.local
 backend/.env
 backend/.env.*.local
@@ -16,3 +14,4 @@ frontend/.env.*.local
 .DS_Store
 Thumbs.db
 Desktop.ini
+config.bat

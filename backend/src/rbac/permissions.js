@@ -8,4 +8,7 @@ export const PERMISSIONS = Object.freeze({
   PRODUCTS_CREATE: 'products.create',
   PRODUCTS_UPDATE: 'products.update',
   CATEGORIES_MANAGE: 'categories.manage',
+  INVENTORY_ADJUST: 'inventory.adjust',
+  SUPPLIERS_MANAGE: 'suppliers.manage',
+  PURCHASES_MANAGE: 'purchases.manage',
 });

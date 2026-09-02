@@ -36,6 +36,22 @@ enum ProductStatus {
   INACTIVE
 }
 
+enum StockMovementReason {
+  OPENING_BALANCE
+  PURCHASE
+  SALE
+  RETURN
+  ADJUSTMENT
+  DAMAGE
+  TRANSFER
+}
+
+enum PurchaseStatus {
+  PENDING
+  RECEIVED
+  CANCELLED
+}
+
 model User {
   id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email             String     @unique
@@ -56,6 +72,8 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
   sentInvitations         Invitation[]
+  recordedStockMovements  InventoryMovement[]
+  createdPurchases        Purchase[]
 
   @@map("users")
 }
@@ -72,10 +90,14 @@ model Business {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships Membership[]
-  invitations Invitation[]
-  categories  Category[]
-  products    Product[]
+  memberships        Membership[]
+  invitations        Invitation[]
+  categories         Category[]
+  products           Product[]
+  inventoryMovements InventoryMovement[]
+  suppliers          Supplier[]
+  purchases          Purchase[]
+  purchaseItems      PurchaseItem[]
 
   @@map("businesses")
 }
@@ -111,13 +133,91 @@ model Product {
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  business      Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category      Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  movements     InventoryMovement[]
+  purchaseItems PurchaseItem[]
 
   @@unique([businessId, sku])
   @@index([businessId])
   @@index([businessId, categoryId])
   @@map("products")
+}
+
+model Supplier {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String   @map("business_id") @db.Uuid
+  name        String
+  contactName String?  @map("contact_name")
+  phone       String?
+  email       String?
+  address     String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchases Purchase[]
+
+  @@index([businessId])
+  @@map("suppliers")
+}
+
+model Purchase {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String         @map("business_id") @db.Uuid
+  supplierId      String         @map("supplier_id") @db.Uuid
+  status          PurchaseStatus @default(PENDING)
+  note            String?
+  createdByUserId String?        @map("created_by_user_id") @db.Uuid
+  receivedAt      DateTime?      @map("received_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  business  Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier  Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy User?          @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items     PurchaseItem[]
+
+  @@index([businessId])
+  @@index([supplierId])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String  @map("business_id") @db.Uuid
+  purchaseId String  @map("purchase_id") @db.Uuid
+  productId  String  @map("product_id") @db.Uuid
+  quantity   Int
+  unitCost   Decimal @map("unit_cost") @db.Decimal(12, 2)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([purchaseId])
+  @@index([productId])
+  @@map("purchase_items")
+}
+
+model InventoryMovement {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String              @map("business_id") @db.Uuid
+  productId       String              @map("product_id") @db.Uuid
+  quantity        Int
+  reason          StockMovementReason
+  note            String?
+  createdByUserId String?             @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([productId])
+  @@map("inventory_movements")
 }
 
 model Membership {
