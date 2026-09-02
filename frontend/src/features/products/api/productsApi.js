@@ -8,3 +8,6 @@ export const updateProduct = (productId, payload) =>
 export const listCategories = () => apiClient.get('/categories').then((r) => r.data);
 export const createCategory = (payload) => apiClient.post('/categories', payload).then((r) => r.data);
 export const deleteCategory = (categoryId) => apiClient.delete(`/categories/${categoryId}`).then((r) => r.data);
+
+export const recordStockMovement = (productId, payload) =>
+  apiClient.post(`/inventory/${productId}/movements`, payload).then((r) => r.data);

@@ -29,6 +29,9 @@ export default function HomePage() {
           <Link to="/products">Products</Link>
         </p>
         <p>
+          <Link to="/purchasing">Purchasing</Link>
+        </p>
+        <p>
           <Link to="/team">Team</Link>
         </p>
         <button onClick={handleLogout}>Log out</button>
