@@ -26,6 +26,9 @@ export default function HomePage() {
         <h2>{activeMembership?.businessName ?? 'BusinessOS'}</h2>
         <p>{activeMembership?.role}</p>
         <p>
+          <Link to="/products">Products</Link>
+        </p>
+        <p>
           <Link to="/team">Team</Link>
         </p>
         <button onClick={handleLogout}>Log out</button>

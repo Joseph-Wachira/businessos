@@ -7,6 +7,7 @@ import RegisterPage from './features/auth/pages/RegisterPage.jsx';
 import ForgotPasswordPage from './features/auth/pages/ForgotPasswordPage.jsx';
 import CreateBusinessPage from './features/businesses/pages/CreateBusinessPage.jsx';
 import MembersPage from './features/businesses/pages/MembersPage.jsx';
+import ProductsPage from './features/products/pages/ProductsPage.jsx';
 import HomePage from './features/dashboard/pages/HomePage.jsx';
 
 function HomeRoute() {
@@ -41,6 +42,16 @@ export default function App() {
           <ProtectedRoute>
             <RequireBusiness>
               <MembersPage />
+            </RequireBusiness>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/products"
+        element={
+          <ProtectedRoute>
+            <RequireBusiness>
+              <ProductsPage />
             </RequireBusiness>
           </ProtectedRoute>
         }

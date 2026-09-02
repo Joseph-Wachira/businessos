@@ -5,4 +5,7 @@ export const PERMISSIONS = Object.freeze({
   BUSINESS_INVITE_MEMBER: 'business.invite_member',
   BUSINESS_UPDATE_MEMBER_ROLE: 'business.update_member_role',
   BUSINESS_REMOVE_MEMBER: 'business.remove_member',
+  PRODUCTS_CREATE: 'products.create',
+  PRODUCTS_UPDATE: 'products.update',
+  CATEGORIES_MANAGE: 'categories.manage',
 });

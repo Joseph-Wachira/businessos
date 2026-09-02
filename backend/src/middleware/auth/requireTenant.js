@@ -1,6 +1,9 @@
+import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { forTenant } from '../../db/tenantScope.js';
 import { ApiError } from '../../utils/ApiError.js';
+
+const uuid = z.string().uuid();
 
 /**
  * Resolves which business the request is acting on and verifies the
@@ -18,6 +21,9 @@ export async function requireTenant(req, res, next) {
     return next(
       ApiError.badRequest('BUSINESS_CONTEXT_REQUIRED', 'X-Business-Id header is required'),
     );
+  }
+  if (!uuid.safeParse(businessId).success) {
+    return next(ApiError.badRequest('BUSINESS_CONTEXT_INVALID', 'X-Business-Id header must be a valid UUID'));
   }
 
   // A route that also carries a :businessId URL segment (e.g. GET

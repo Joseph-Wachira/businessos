@@ -31,6 +31,11 @@ enum InvitationStatus {
   REVOKED
 }
 
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model User {
   id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email             String     @unique
@@ -69,8 +74,50 @@ model Business {
 
   memberships Membership[]
   invitations Invitation[]
+  categories  Category[]
+  products    Product[]
 
   @@map("businesses")
+}
+
+model Category {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@index([businessId])
+  @@map("categories")
+}
+
+model Product {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String        @map("business_id") @db.Uuid
+  categoryId   String?       @map("category_id") @db.Uuid
+  name         String
+  sku          String?
+  barcode      String?
+  description  String?
+  costPrice    Decimal       @default(0) @map("cost_price") @db.Decimal(12, 2)
+  sellingPrice Decimal       @default(0) @map("selling_price") @db.Decimal(12, 2)
+  taxRate      Decimal       @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  minStock     Int           @default(0) @map("min_stock")
+  imageUrl     String?       @map("image_url")
+  status       ProductStatus @default(ACTIVE)
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, sku])
+  @@index([businessId])
+  @@index([businessId, categoryId])
+  @@map("products")
 }
 
 model Membership {

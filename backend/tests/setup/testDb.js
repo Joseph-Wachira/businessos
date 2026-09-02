@@ -20,6 +20,8 @@ beforeEach(async () => {
     'password_reset_tokens',
     'email_verification_tokens',
     'invitations',
+    'products',
+    'categories',
     'memberships',
     'businesses',
     'users',
